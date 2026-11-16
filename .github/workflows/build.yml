@@ -1,0 +1,52 @@
+name: Build ESP32 firmware
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "ADF4351_ESP32/**"
+      - ".github/workflows/build.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "ADF4351_ESP32/**"
+      - ".github/workflows/build.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Compile ESP32 DevKit V1
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Install ESP32 Arduino core
+        run: |
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32
+
+      - name: Compile firmware
+        run: |
+          arduino-cli compile \
+            --fqbn esp32:esp32:esp32 \
+            --warnings all \
+            --output-dir "${{ github.workspace }}/build/firmware" \
+            ADF4351_ESP32
+
+      - name: Publish firmware binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: ADF4351-ESP32-firmware
+          path: |
+            build/firmware/*.bin
+            build/firmware/*.elf
+            build/firmware/*.map
+          if-no-files-found: error
+          retention-days: 30
