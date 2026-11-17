@@ -7,7 +7,7 @@
 1. Откройте вкладку **Actions** в GitHub.
 2. Выберите последний успешный запуск **Build firmware**.
 3. Внизу страницы скачайте артефакт **esp32-firmware**.
-4. В архиве находятся `firmware.bin`, `bootloader.bin`, `partitions.bin` и краткая информация о целевой плате.
+4. В архиве находятся `firmware.bin`, `bootloader.bin`, `partitions.bin`, `boot_app0.bin`, `flash_args.txt` с адресами записи и краткая информация о целевой плате.
 
 Целевая плата: **ESP32 Dev Module / ESP32 DevKit V1 (38-pin)**, PlatformIO environment: `esp32dev`.
 
