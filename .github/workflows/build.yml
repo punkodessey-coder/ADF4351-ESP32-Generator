@@ -1,52 +1,43 @@
-name: Build ESP32 firmware
+name: Build firmware
 
 on:
   push:
-    branches: [main]
-    paths:
-      - "ADF4351_ESP32/**"
-      - ".github/workflows/build.yml"
+    branches: [main, 'feature/**']
   pull_request:
     branches: [main]
-    paths:
-      - "ADF4351_ESP32/**"
-      - ".github/workflows/build.yml"
   workflow_dispatch:
-
-permissions:
-  contents: read
 
 jobs:
   build:
-    name: Compile ESP32 DevKit V1
     runs-on: ubuntu-latest
     steps:
-      - name: Check out repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Arduino CLI
-        uses: arduino/setup-arduino-cli@v2
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-      - name: Install ESP32 Arduino core
+      - name: Install PlatformIO Core
+        run: pip install --upgrade platformio
+
+      - name: Build firmware
+        run: pio run
+
+      - name: Prepare firmware artifact
         run: |
-          arduino-cli core update-index
-          arduino-cli core install esp32:esp32
+          mkdir -p artifact
+          cp .pio/build/esp32dev/firmware.bin artifact/firmware.bin
+          cp .pio/build/esp32dev/bootloader.bin artifact/bootloader.bin
+          cp .pio/build/esp32dev/partitions.bin artifact/partitions.bin
+          if [ -f .pio/build/esp32dev/boot_app0.bin ]; then cp .pio/build/esp32dev/boot_app0.bin artifact/; fi
+          printf 'Board: ESP32 Dev Module (esp32dev)\nFramework: Arduino via PlatformIO\n' > artifact/README.txt
 
-      - name: Compile firmware
-        run: |
-          arduino-cli compile \
-            --fqbn esp32:esp32:esp32 \
-            --warnings all \
-            --output-dir "${{ github.workspace }}/build/firmware" \
-            ADF4351_ESP32
-
-      - name: Publish firmware binaries
+      - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ADF4351-ESP32-firmware
-          path: |
-            build/firmware/*.bin
-            build/firmware/*.elf
-            build/firmware/*.map
+          name: esp32-firmware
+          path: artifact/
           if-no-files-found: error
           retention-days: 30
