@@ -25,14 +25,22 @@ jobs:
       - name: Build firmware
         run: pio run
 
-      - name: Prepare firmware artifact
+      - name: Prepare complete ESP32 flash package
         run: |
           mkdir -p artifact
           cp .pio/build/esp32dev/firmware.bin artifact/firmware.bin
           cp .pio/build/esp32dev/bootloader.bin artifact/bootloader.bin
           cp .pio/build/esp32dev/partitions.bin artifact/partitions.bin
-          if [ -f .pio/build/esp32dev/boot_app0.bin ]; then cp .pio/build/esp32dev/boot_app0.bin artifact/; fi
-          printf 'Board: ESP32 Dev Module (esp32dev)\nFramework: Arduino via PlatformIO\n' > artifact/README.txt
+          BOOT_APP0="$(find "$HOME/.platformio/packages" -path '*/tools/partitions/boot_app0.bin' -print -quit)"
+          test -n "$BOOT_APP0"
+          cp "$BOOT_APP0" artifact/boot_app0.bin
+          cat > artifact/flash_args.txt <<'EOF'
+          0x1000 bootloader.bin
+          0x8000 partitions.bin
+          0xe000 boot_app0.bin
+          0x10000 firmware.bin
+          EOF
+          printf 'Target: ESP32 Dev Module (ESP32 DevKit V1)\nPlatformIO environment: esp32dev\nFlash offsets: see flash_args.txt\n' > artifact/README.txt
 
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
