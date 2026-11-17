@@ -3,7 +3,7 @@
 #include <Preferences.h>
 #include <math.h>
 
-static constexpr uint8_t PIN_CLK=18, PIN_DAT=23, PIN_LE=27, PIN_CE=17, PIN_LD=16, PIN_MUX=34, PIN_CLK_MON=35;
+static constexpr uint8_t PIN_CLK=18, PIN_DAT=23, PIN_LE=27, PIN_CE=17, PIN_LD=16, PIN_MUX=34;
 static constexpr double REF_HZ=10410500.0, FMIN=35.0, FMAX=4400.0, VCOMIN=2200000000.0, VCOMAX=4400000000.0;
 static constexpr uint16_t MOD=4095;
 const char* SSID="ADF4351-ESP32";
@@ -16,8 +16,9 @@ double freqMHz=1000, sweepStart=100, sweepStop=200, sweepStep=1;
 uint32_t sweepMs=100, lastSweep=0, lastWriteMs=0, writeCount=0, lockChanges=0, lastLockSample=0;
 uint8_t powerCode=3, divider=1, spiHalfUs=0;
 bool rf=true, sweep=false, autoClock=false, lastLock=false;
-volatile uint32_t clkEdges=0; uint32_t clkSampleAt=0, clkLastCount=0; double clkMeasuredHz=0;
-void IRAM_ATTR onClkEdge(){ ++clkEdges; }
+volatile uint32_t muxTestEdges=0; volatile bool muxTestActive=false;
+bool refTestDone=false, refTestSignal=false; double refTestHz=0; uint32_t refTestCount=0, refTestAt=0;
+void IRAM_ATTR onMuxEdge(){ if(muxTestActive) ++muxTestEdges; }
 String lastError="";
 
 void writeReg(uint32_t v){
@@ -50,6 +51,22 @@ bool tune(double mhz){
   freqMHz=mhz; divider=(uint8_t)(1U<<dc); writeAll(); delay(35); lastError=""; return true;
 }
 void setRF(bool on){rf=on;if(on)regv[4]|=(1UL<<5);else regv[4]&=~(1UL<<5);writeReg(regv[4]);}
+// Temporarily route the ADF4351 R-counter output to MUXOUT and count it on GPIO34.
+// This checks clock propagation through REFIN/R-counter; it does not measure input amplitude.
+bool runReferenceTest(){
+  if(sweep) sweep=false;
+  const uint32_t savedR2=regv[2];
+  const uint32_t testR2=(savedR2 & ~((7UL<<26)|(1023UL<<14))) | (3UL<<26) | (1023UL<<14);
+  muxTestActive=false; noInterrupts(); muxTestEdges=0; interrupts();
+  writeReg(testR2); delay(30);
+  noInterrupts(); muxTestEdges=0; muxTestActive=true; interrupts();
+  delay(1500);
+  noInterrupts(); muxTestActive=false; uint32_t edges=muxTestEdges; interrupts();
+  writeReg(savedR2); delay(30);
+  refTestCount=edges; refTestHz=(double)edges/1.5; refTestSignal=refTestHz>(REF_HZ/1023.0)*0.5 && refTestHz<(REF_HZ/1023.0)*1.5;
+  refTestDone=true; refTestAt=millis();
+  return refTestSignal;
+}
 double num(const String&s,const char*key,double def){String k=String("\"")+key+"\"";int p=s.indexOf(k);if(p<0)return def;p=s.indexOf(':',p);if(p<0)return def;int e=s.indexOf(',',p+1);if(e<0)e=s.indexOf('}',p+1);return e<0?def:s.substring(p+1,e).toDouble();}
 bool jsonBool(const String&s,const char*key,bool def){String k=String("\"")+key+"\"";int p=s.indexOf(k);if(p<0)return def;p=s.indexOf(':',p);if(p<0)return def;String v=s.substring(p+1);v.trim();if(v.startsWith("true"))return true;if(v.startsWith("false"))return false;return def;}
 void error(int c,const String&m){server.send(c,"application/json",String("{\"error\":\"")+m+"\"}");}
@@ -62,8 +79,7 @@ String status(){
  s+=",\"spi_khz\":"+String(spiHalfUs?500.0/spiHalfUs:0,1)+",\"auto_clock\":"+String(autoClock?"true":"false");
  s+=",\"writes\":"+String(writeCount)+",\"last_write_age_ms\":"+String(millis()-lastWriteMs);
  s+=",\"lock_changes\":"+String(lockChanges)+",\"uptime_s\":"+String(millis()/1000);
- uint32_t now=millis(); if(now-clkSampleAt>=1000){ noInterrupts(); uint32_t n=clkEdges; interrupts(); clkMeasuredHz=(double)(n-clkLastCount)*1000.0/(now-clkSampleAt); clkLastCount=n; clkSampleAt=now; }
- s+=",\"clk_edges\":"+String(clkEdges)+",\"clk_hz\":"+String(clkMeasuredHz,1)+",\"clk_detected\":"+String(clkMeasuredHz>0?"true":"false");
+ s+=",\"ref_test_done\":"+String(refTestDone?"true":"false")+",\"ref_test_signal\":"+String(refTestSignal?"true":"false")+",\"ref_test_hz\":"+String(refTestHz,2)+",\"ref_test_expected_hz\":"+String(REF_HZ/1023.0,2)+",\"ref_test_edges\":"+String(refTestCount)+",\"ref_test_age_ms\":"+String(refTestDone?millis()-refTestAt:0);
  s+=",\"wifi_clients\":"+String(WiFi.softAPgetStationNum())+",\"heap\":"+String(ESP.getFreeHeap());
  s+=",\"chip\":\"ESP32\",\"last_error\":\""+lastError+"\"}";
  return s;
@@ -88,11 +104,11 @@ input{width:100%;margin:6px 0 12px}button{cursor:pointer;background:#245da8;bord
 <div id="presets" class="hidden"><section class="card"><b>Сохранённые настройки</b><p class="muted">Сохранение частоты и мощности во внутренней памяти ESP32.</p><div id="presetList"></div></section></div>
 <div id="monitor" class="hidden"><section class="card"><div class="row"><b>Монитор соединения с ADF4351</b><button class="alt" onclick="refresh()">Refresh</button></div><p class="muted">Диагностика обновляется каждую секунду, пока открыта эта вкладка.</p><div class="grid">
 <div class="metric">Захват PLL<b id="mLock">---</b></div><div class="metric">MUXOUT<b id="mMux">---</b></div>
-<div class="metric">CLK на контрольном входе<b id="mClk">---</b></div><div class="metric">Частота CLK<b id="mSpi">---</b></div><div class="metric">Записи регистров<b id="mWrites">---</b></div>
+<div class="metric">Проверка REFIN через R-counter<b id="mRef">---</b></div><div class="metric">Частота MUXOUT в тесте<b id="mRefHz">---</b></div><div class="metric">Записи регистров<b id="mWrites">---</b></div>
 <div class="metric">После последней записи<b id="mAge">---</b></div><div class="metric">Изменения LOCK<b id="mChanges">---</b></div>
 <div class="metric">Клиенты Wi-Fi<b id="mClients">---</b></div><div class="metric">Время работы ESP32<b id="mUptime">---</b></div>
 <div class="metric">Свободная память<b id="mHeap">---</b></div><div class="metric">RF output<b id="mRF">---</b></div></div>
-<p id="diag" class="muted">Ожидание диагностики…</p><p class="muted">Важно: ADF4351 не возвращает подтверждение записи или содержимое регистров. Счётчик импульсов контролирует выход ESP32, а LOCK — косвенный признак работы PLL.</p></section></div>
+<p id="diag" class="muted">Ожидание диагностики…</p><div class="row"><button onclick="runRefTest()">Проверить наличие опоры</button></div><p id="refDetail" class="muted">Тест временно переключает MUXOUT в R-counter output, измеряет частоту и автоматически возвращает режим Digital Lock Detect.</p><p class="muted">Проверка подтверждает прохождение импульсов через входной тракт REFIN и R-счётчик. Она не измеряет амплитуду/форму сигнала и не подтверждает правильность всех регистров.</p></section></div>
 <div id="settings" class="hidden"><section class="card"><b>Настройки последовательного интерфейса</b><p class="muted">Настройка программного CLK. Меньший полупериод означает более высокую частоту.</p><label>Скорость CLK<select id="spi" style="width:100%"><option value="0">Максимальная</option><option value="1">Около 500 кГц</option><option value="2">Около 250 кГц</option><option value="5">Около 100 кГц</option></select></label><div class="row"><button onclick="saveClock(false)">Применить</button><button class="alt" onclick="saveClock(true)">Автоподбор</button></div><p id="clockMsg" class="muted"></p></section>
 <section class="card"><b>Информация об устройстве</b><p>Controller: ESP32 DevKit V1</p><p>RF synthesizer: Analog Devices ADF4351</p><p>Опорная частота в настройках: 10,4105 МГц</p><p>Control interface: 3-wire serial (CLK, DATA, LE), LD and MUX inputs</p><p>Точка доступа: ADF4351-ESP32 / 192.168.4.2</p><p class="muted">The fitted reference oscillator, carrier-board supply and logic-level compatibility must be verified on the actual hardware.</p></section></div>
 <footer class="muted">Подключитесь к Wi-Fi <b>ADF4351-ESP32</b> (password <b>adf4351rf</b>) and open <b>http://192.168.4.2</b>.</footer></main>
@@ -101,8 +117,9 @@ let active='gen';function tab(t){active=t;['gen','presets','monitor','settings']
 async function api(path,data){let r=await fetch(path,{method:data?'POST':'GET',headers:{'Content-Type':'application/json'},body:data?JSON.stringify(data):undefined});let j=await r.json();if(!r.ok)throw Error(j.error||'Request failed');return j}
 async function act(fn){try{await fn();await refresh()}catch(e){alert(e.message)}}
 async function refresh(){try{let s=await api('/api/status');document.getElementById('freq').textContent=Number(s.frequency_mhz).toFixed(6)+' MHz';if(document.activeElement!==document.getElementById('mhz'))document.getElementById('mhz').value=s.frequency_mhz;document.getElementById('power').value=s.power_index;let p=document.getElementById('pll');p.textContent=s.pll_locked?'ЗАХВАТ':'НЕТ ЗАХВАТА';p.className=s.pll_locked?'good':'bad';document.getElementById('rfstate').textContent=s.rf_enabled?'ВКЛ':'ВЫКЛ';document.getElementById('mux').textContent=s.mux_high?'ВЫСОКИЙ':'НИЗКИЙ';document.getElementById('divider').textContent='÷'+s.divider;
-[['mLock',s.pll_locked?'ЗАХВАТ':'НЕТ ЗАХВАТА'],['mMux',s.mux_high?'HIGH':'LOW'],['mClk',s.clk_detected?'Импульсы есть':'Импульсов нет'],['mSpi',s.clk_hz>=1?(s.clk_hz>=1000?(s.clk_hz/1000).toFixed(2)+' кГц':s.clk_hz.toFixed(0)+' Гц'):'Нет сигнала'],['mWrites',s.writes],['mAge',s.last_write_age_ms+' мс'],['mChanges',s.lock_changes],['mClients',s.wifi_clients],['mUptime',s.uptime_s+' с'],['mHeap',s.heap+' байт'],['mRF',s.rf_enabled?'ВКЛ':'ВЫКЛ']].forEach(([id,v])=>{let e=document.getElementById(id);if(e)e.textContent=v});
-document.getElementById('diag').textContent=s.last_error?'Ошибка прошивки: '+s.last_error:(s.pll_locked?'PLL сообщает о захвате; передача команд выполнена.':'Нет сигнала захвата PLL. Проверьте опору, питание, соединения, регистры и фильтр петли.');document.getElementById('spi').value=s.spi_half_us}catch(e){}}
+[['mLock',s.pll_locked?'ЗАХВАТ':'НЕТ ЗАХВАТА'],['mMux',s.mux_high?'HIGH':'LOW'],['mRef',!s.ref_test_done?'Не проверено':(s.ref_test_signal?'Импульсы обнаружены':'Импульсы не обнаружены')],['mRefHz',s.ref_test_done?s.ref_test_hz.toFixed(2)+' Гц':'---'],['mWrites',s.writes],['mAge',s.last_write_age_ms+' мс'],['mChanges',s.lock_changes],['mClients',s.wifi_clients],['mUptime',s.uptime_s+' с'],['mHeap',s.heap+' байт'],['mRF',s.rf_enabled?'ВКЛ':'ВЫКЛ']].forEach(([id,v])=>{let e=document.getElementById(id);if(e)e.textContent=v});
+document.getElementById('diag').textContent=s.last_error?'Ошибка прошивки: '+s.last_error:(s.pll_locked?'LD сообщает о захвате PLL.':'LD не сообщает о захвате PLL.');document.getElementById('refDetail').textContent=!s.ref_test_done?'Тест опоры ещё не запускался.':('Ожидается около '+s.ref_test_expected_hz.toFixed(2)+' Гц; измерено '+s.ref_test_hz.toFixed(2)+' Гц ('+s.ref_test_edges+' фронтов). '+(s.ref_test_signal?'Опорные импульсы обнаружены в тракте REFIN/R-counter.':'Импульсы не обнаружены или частота вне ожидаемого диапазона.')+' Возраст результата: '+s.ref_test_age_ms+' мс.');document.getElementById('spi').value=s.spi_half_us}catch(e){}}
+async function runRefTest(){if(!confirm('Запустить проверку опоры? На 1,5 секунды MUXOUT переключится с Lock Detect на R-counter output, затем вернётся обратно.'))return;try{document.getElementById('refDetail').textContent='Идёт измерение…';await api('/api/ref_test',{});await refresh()}catch(e){alert(e.message)}}
 function setFreq(){const el=document.getElementById('mhz');const v=el.valueAsNumber;if(!Number.isFinite(v)||v<35||v>4400){alert('Введите частоту от 35 до 4400 МГц');return}act(()=>api('/api/set',{mhz:v}))}function nudge(d){const el=document.getElementById('mhz');el.value=el.valueAsNumber+d;setFreq()}
 function rfSet(enabled){act(()=>api('/api/rf',{enabled}))}function setPower(){act(()=>api('/api/power',{index:Number(document.getElementById('power').value)}))}
 function sweepSet(enabled){if(!enabled){act(()=>api('/api/sweep',{enabled:false}));return}const a=document.getElementById('start').valueAsNumber,z=document.getElementById('stop').valueAsNumber,st=document.getElementById('step').valueAsNumber,iv=document.getElementById('interval').valueAsNumber;if(![a,z,st,iv].every(Number.isFinite)||a<35||z>4400||a>=z||st<=0||iv<20||iv>60000){alert('Проверьте параметры: 35 ≤ начало < конец ≤ 4400 МГц; шаг > 0; интервал 20–60000 мс');return}act(()=>api('/api/sweep',{enabled:true,start:a,stop:z,step:st,interval:iv}))}
@@ -114,6 +131,7 @@ setInterval(refresh,1000);refresh();
 void setupRoutes(){
  server.on("/",HTTP_GET,[]{server.send_P(200,"text/html",HTML);});
  server.on("/api/status",HTTP_GET,[]{server.send(200,"application/json",status());});
+ server.on("/api/ref_test",HTTP_POST,[]{bool ok=runReferenceTest();String s=String("{\"ok\":")+(ok?"true":"false")+",\"status\":"+status()+"}";server.send(200,"application/json",s);});
  server.on("/api/set",HTTP_POST,[]{double f=num(server.arg("plain"),"mhz",-1);if(!tune(f))return error(400,lastError);prefs.putDouble("freq",freqMHz);server.send(200,"application/json",status());});
  server.on("/api/rf",HTTP_POST,[]{setRF(jsonBool(server.arg("plain"),"enabled",false));prefs.putBool("rf",rf);server.send(200,"application/json",status());});
  server.on("/api/power",HTTP_POST,[]{int p=(int)num(server.arg("plain"),"index",-1);if(p<0||p>3)return error(400,"Power index must be 0..3");powerCode=p;tune(freqMHz);prefs.putUInt("power",powerCode);server.send(200,"application/json",status());});
@@ -124,7 +142,7 @@ void setupRoutes(){
  server.on("/api/clock",HTTP_POST,[]{String b=server.arg("plain");int h=(int)num(b,"half_us",0);bool a=jsonBool(b,"auto",false);if(!a&&h!=0&&h!=1&&h!=2&&h!=5)return error(400,"Allowed half periods: 0, 1, 2, 5 us");autoClock=a;if(a){uint8_t candidates[]={0,1,2,5};uint8_t chosen=spiHalfUs;bool found=false;for(uint8_t c:candidates){spiHalfUs=c;if(tune(freqMHz)){delay(100);if(digitalRead(PIN_LD)){chosen=c;found=true;break;}}}if(found)spiHalfUs=chosen;else {spiHalfUs=2;tune(freqMHz);}prefs.putUChar("spi",spiHalfUs);String msg=found?"Selected fastest tested clock with PLL lock (heuristic).":"No tested speed produced lock; using conservative 250 kHz setting.";server.send(200,"application/json",String("{\"message\":\"")+msg+"\"}");}else{spiHalfUs=h;prefs.putUChar("spi",spiHalfUs);tune(freqMHz);server.send(200,"application/json",String("{\"message\":\"CLK timing updated.\"}"));}});
 }
 void setup(){
- pinMode(PIN_CLK,OUTPUT);pinMode(PIN_DAT,OUTPUT);pinMode(PIN_LE,OUTPUT);pinMode(PIN_CE,OUTPUT);pinMode(PIN_LD,INPUT);pinMode(PIN_MUX,INPUT);pinMode(PIN_CLK_MON,INPUT);attachInterrupt(digitalPinToInterrupt(PIN_CLK_MON),onClkEdge,RISING);clkSampleAt=millis();
+ pinMode(PIN_CLK,OUTPUT);pinMode(PIN_DAT,OUTPUT);pinMode(PIN_LE,OUTPUT);pinMode(PIN_CE,OUTPUT);pinMode(PIN_LD,INPUT);pinMode(PIN_MUX,INPUT);attachInterrupt(digitalPinToInterrupt(PIN_MUX),onMuxEdge,RISING);
  digitalWrite(PIN_CLK,LOW);digitalWrite(PIN_DAT,LOW);digitalWrite(PIN_LE,LOW);digitalWrite(PIN_CE,HIGH);
  prefs.begin("adf4351",false);freqMHz=prefs.getDouble("freq",1000);powerCode=(uint8_t)prefs.getUInt("power",3);if(powerCode>3)powerCode=3;rf=prefs.getBool("rf",true);spiHalfUs=prefs.getUChar("spi",0);
  WiFi.mode(WIFI_AP);WiFi.softAPConfig(apIP,gateway,subnet);WiFi.softAP(SSID,PASSWORD);setupRoutes();server.begin();if(tune(freqMHz))setRF(rf);
