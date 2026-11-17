@@ -4,7 +4,7 @@
 #include <math.h>
 
 static constexpr uint8_t PIN_CLK=18, PIN_DAT=23, PIN_LE=27, PIN_CE=17, PIN_LD=16, PIN_MUX=34, PIN_CLK_MON=35;
-static constexpr double REF_HZ=25000000.0, FMIN=35.0, FMAX=4400.0, VCOMIN=2200000000.0, VCOMAX=4400000000.0;
+static constexpr double REF_HZ=10000000.0, FMIN=35.0, FMAX=4400.0, VCOMIN=2200000000.0, VCOMAX=4400000000.0;
 static constexpr uint16_t MOD=4095;
 const char* SSID="ADF4351-ESP32";
 const char* PASSWORD="adf4351rf";
@@ -94,7 +94,7 @@ input{width:100%;margin:6px 0 12px}button{cursor:pointer;background:#245da8;bord
 <div class="metric">Свободная память<b id="mHeap">---</b></div><div class="metric">RF output<b id="mRF">---</b></div></div>
 <p id="diag" class="muted">Ожидание диагностики…</p><p class="muted">Важно: ADF4351 не возвращает подтверждение записи или содержимое регистров. Счётчик импульсов контролирует выход ESP32, а LOCK — косвенный признак работы PLL.</p></section></div>
 <div id="settings" class="hidden"><section class="card"><b>Настройки последовательного интерфейса</b><p class="muted">Настройка программного CLK. Меньший полупериод означает более высокую частоту.</p><label>Скорость CLK<select id="spi" style="width:100%"><option value="0">Максимальная</option><option value="1">Около 500 кГц</option><option value="2">Около 250 кГц</option><option value="5">Около 100 кГц</option></select></label><div class="row"><button onclick="saveClock(false)">Применить</button><button class="alt" onclick="saveClock(true)">Автоподбор</button></div><p id="clockMsg" class="muted"></p></section>
-<section class="card"><b>Информация об устройстве</b><p>Controller: ESP32 DevKit V1</p><p>RF synthesizer: Analog Devices ADF4351</p><p>Опорная частота в настройках: 25,000 МГц</p><p>Control interface: 3-wire serial (CLK, DATA, LE), LD and MUX inputs</p><p>Точка доступа: ADF4351-ESP32 / 192.168.4.2</p><p class="muted">The fitted reference oscillator, carrier-board supply and logic-level compatibility must be verified on the actual hardware.</p></section></div>
+<section class="card"><b>Информация об устройстве</b><p>Controller: ESP32 DevKit V1</p><p>RF synthesizer: Analog Devices ADF4351</p><p>Опорная частота в настройках: 10,000 МГц</p><p>Control interface: 3-wire serial (CLK, DATA, LE), LD and MUX inputs</p><p>Точка доступа: ADF4351-ESP32 / 192.168.4.2</p><p class="muted">The fitted reference oscillator, carrier-board supply and logic-level compatibility must be verified on the actual hardware.</p></section></div>
 <footer class="muted">Подключитесь к Wi-Fi <b>ADF4351-ESP32</b> (password <b>adf4351rf</b>) and open <b>http://192.168.4.2</b>.</footer></main>
 <script>
 let active='gen';function tab(t){active=t;['gen','presets','monitor','settings'].forEach(x=>document.getElementById(x).classList.toggle('hidden',x!==t));if(t==='presets')loadPresets();refresh()}
