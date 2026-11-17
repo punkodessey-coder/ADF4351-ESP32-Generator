@@ -11,7 +11,19 @@
 
 Целевая плата: **ESP32 Dev Module / ESP32 DevKit V1 (38-pin)**, PlatformIO environment: `esp32dev`.
 
-## Сборка и загрузка из PlatformIO
+## Сборка и загрузка
+
+Сборка выполняется PlatformIO, как в проекте GNSS: GitHub Actions запускает `pio run` и публикует артефакт `esp32-firmware`.
+
+1. Откройте **Actions** и выберите последний успешный **Build firmware**.
+2. Скачайте и распакуйте артефакт `esp32-firmware`.
+3. Поместите `flash_windows.bat` рядом с четырьмя файлами `bootloader.bin`, `partitions.bin`, `boot_app0.bin`, `firmware.bin`.
+4. Запустите `flash_windows.bat`, введите COM-порт. Скрипт установит esptool через Python при необходимости и прошьёт классический ESP32 DevKit V1.
+
+Скрипт использует адреса записи: bootloader `0x1000`, partitions `0x8000`, boot_app0 `0xE000`, firmware `0x10000`. Это целевой **ESP32**, не ESP32-S3. Если плата не входит в режим загрузки автоматически, удерживайте BOOT, нажмите EN/RESET и отпустите BOOT.
+
+Для разработки в VS Code можно открыть проект с PlatformIO и использовать **Upload** либо команды `pio run` и `pio run -t upload`.
+
 
 Откройте репозиторий в VS Code с расширением PlatformIO, подключите ESP32 по USB и выполните **PlatformIO: Upload**. Для командной строки:
 
